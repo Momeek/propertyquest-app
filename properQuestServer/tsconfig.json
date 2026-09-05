@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "es2016",
+    "lib": [
+      "es6"
+    ],
+    /* Modules */
+    "module": "commonjs",
+    "rootDir": "src",
+    "moduleResolution": "node",
+    "baseUrl": "./",
+    "paths": {
+      "*": [
+        "node_modules/*"
+      ],
+    },
+    "typeRoots": [
+      "node_modules/@types",
+    ],
+    "resolveJsonModule": true,
+    /* JavaScript Support */
+    "allowJs": true,
+    /* Emit */
+    "sourceMap": true,
+    "outDir": "dist",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    /* Type Checking */
+    "strict": true,
+    "noImplicitAny": false,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "noImplicitOverride": true,
+    "allowUnreachableCode": false,
+    /* Completeness */
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "declaration": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js",
+    "env.d.ts",
+    "src/config/config.js"
+  ],
+}
