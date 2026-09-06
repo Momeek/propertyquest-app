@@ -125,8 +125,8 @@ jobs:
             - name: Configure AWS credentials
               uses: aws-actions/configure-aws-credentials@v4
               with:
-                  aws-region: ${{ env.AWS_REGION }}
-                  role-to-assume: ${{ secrets.OIDC }}
+                  aws-region: ${{ vars.AWS_REGION }}
+                  role-to-assume: ${{ vars.AWS_ROLE_ARN }}
 
             - name: Log in to Amazon ECR
               id: login-ecr
@@ -167,7 +167,7 @@ jobs:
             - name: Check out Helm repository
               uses: actions/checkout@v4
               with:
-                  repository: ${{ secrets.HELM_REPO_USER }}/${{ vars.HELM_REPO_NAME || 'propertyquest-helm' }}
+                  repository: ${{ vars.HELM_REPO_USER }}/${{ vars.HELM_REPO_NAME || 'propertyquest-helm' }}
                   token: ${{ secrets.GITOPS_PAT }}
                   path: helm-repo
 

@@ -8,6 +8,9 @@ declare namespace NodeJS {
     DB_USER: string;
     DB_PASS: string;
     DB_NAME: string;
+    DB_PORT: string;
+    DB_SSL: 'true' | 'false';
+    DB_SSL_REJECT_UNAUTHORIZED: 'true' | 'false';
     CARD_AND_SUB_AMOUNT: string;
     JWT_SECRET: string;
     STAFF_SECRET_KEY: string;

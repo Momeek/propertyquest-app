@@ -49,6 +49,9 @@ export const EnvSchema = z.object({
   DB_USER: z.string(),
   DB_PASS: z.string(),
   DB_NAME: z.string(),
+  DB_PORT: z.coerce.number().int().positive().default(3306),
+  DB_SSL: z.enum(['true', 'false']).default('false'),
+  DB_SSL_REJECT_UNAUTHORIZED: z.enum(['true', 'false']).default('true'),
   DATABASE_URL: z.string().optional(),
 
   NODE_ENV: z.string().default('development'),
@@ -189,8 +192,8 @@ app.use('/api/properties', async (req, res) => {
           model: User,
           foreignKey: "userId",
           attributes: [
-            'name', 
-            'surname', 
+            'name',
+            'surname',
             'phone',
             'avatarUrl',
             'email',
@@ -200,7 +203,7 @@ app.use('/api/properties', async (req, res) => {
         },
         {
           model: LikedProperty,
-          foreignKey: "propertyId",   
+          foreignKey: "propertyId",
         }
       ]
     });
@@ -208,7 +211,7 @@ app.use('/api/properties', async (req, res) => {
     if (!properties || properties.length === 0) {
       return flow(
         status(200),
-        send('No properties found matching the criteria', { 
+        send('No properties found matching the criteria', {
           properties: [],
           meta: getResponseMeta({
             count: 0,
@@ -221,7 +224,7 @@ app.use('/api/properties', async (req, res) => {
 
     return flow(
       status(200),
-      send('Properties retrieved successfully', { 
+      send('Properties retrieved successfully', {
         properties,
         meta: getResponseMeta({
           count,
@@ -260,7 +263,7 @@ app.use('/api/property/:propertyId', async (req, res) => {
           attributes: [
             'name',
             'userId',
-            'surname', 
+            'surname',
             'phone',
             'avatarUrl',
             'email',
@@ -270,7 +273,7 @@ app.use('/api/property/:propertyId', async (req, res) => {
         },
         {
           model: LikedProperty,
-          foreignKey: "propertyId",   
+          foreignKey: "propertyId",
         }
       ]
     });
@@ -278,12 +281,12 @@ app.use('/api/property/:propertyId', async (req, res) => {
     if (!property) {
       return flow(
         status(404),
-        sendError('Property not found', { 
-          code: ErrorCodes.PROPERTY_NOT_FOUND 
+        sendError('Property not found', {
+          code: ErrorCodes.PROPERTY_NOT_FOUND
         }),
       )(res);
     }
-    
+
 
     return flow(
       status(200),
