@@ -136,25 +136,66 @@ jobs:
               id: image
               run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-            - name: Build and push backend image
+            - name: Build backend image
               uses: docker/build-push-action@v6
               with:
                   context: properQuestServer
                   file: properQuestServer/Dockerfile
-                  push: true
-                  tags: |
-                      ${{ steps.login-ecr.outputs.registry }}/propertybackendimg:${{ steps.image.outputs.tag }}
-                      ${{ steps.login-ecr.outputs.registry }}/propertybackendimg:latest
+                  load: true
+                  tags: propertybackendimg:${{ steps.image.outputs.tag }}
 
-            - name: Build and push frontend image
+            - name: Build frontend image
               uses: docker/build-push-action@v6
               with:
                   context: PropertyQuestClient
                   file: PropertyQuestClient/Dockerfile
-                  push: true
-                  tags: |
-                      ${{ steps.login-ecr.outputs.registry }}/propertyfrontendimg:${{ steps.image.outputs.tag }}
-                      ${{ steps.login-ecr.outputs.registry }}/propertyfrontendimg:latest
+                  load: true
+                  tags: propertyfrontendimg:${{ steps.image.outputs.tag }}
+
+            - name: Scan backend image with Trivy
+              uses: aquasecurity/trivy-action@0.35.0
+              with:
+                  image-ref: propertybackendimg:${{ steps.image.outputs.tag }}
+                  format: table
+                  output: trivy-backend-image.txt
+                  severity: CRITICAL,HIGH
+                  ignore-unfixed: true
+                  exit-code: 1
+
+            - name: Scan frontend image with Trivy
+              uses: aquasecurity/trivy-action@0.35.0
+              with:
+                  image-ref: propertyfrontendimg:${{ steps.image.outputs.tag }}
+                  format: table
+                  output: trivy-frontend-image.txt
+                  severity: CRITICAL,HIGH
+                  ignore-unfixed: true
+                  exit-code: 0
+
+            - name: Upload container Trivy reports
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: trivy-container-reports
+                  path: |
+                      trivy-backend-image.txt
+                      trivy-frontend-image.txt
+                  if-no-files-found: warn
+
+            - name: Push scanned images to ECR
+              env:
+                  ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+                  IMAGE_TAG: ${{ steps.image.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  docker tag "propertybackendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertybackendimg:${IMAGE_TAG}"
+                  docker tag "propertybackendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertybackendimg:latest"
+                  docker tag "propertyfrontendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertyfrontendimg:${IMAGE_TAG}"
+                  docker tag "propertyfrontendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertyfrontendimg:latest"
+                  docker push "${ECR_REGISTRY}/propertybackendimg:${IMAGE_TAG}"
+                  docker push "${ECR_REGISTRY}/propertybackendimg:latest"
+                  docker push "${ECR_REGISTRY}/propertyfrontendimg:${IMAGE_TAG}"
+                  docker push "${ECR_REGISTRY}/propertyfrontendimg:latest"
 
     update-helm:
         name: Update Helm repository
