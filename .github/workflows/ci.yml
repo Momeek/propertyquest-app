@@ -1,4 +1,4 @@
-name: CI/CD
+name: Propertyquest CI
 
 on:
     pull_request:
