@@ -1,208 +1,263 @@
-name: CI/CD
+name: Propertyquest CI
 
 on:
-    pull_request:
-        branches:
-            - main
-    push:
-        branches:
-            - main
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
 
 permissions:
-    contents: read
+  contents: read
 
 env:
-    NODE_VERSION: 20
-    AWS_REGION: ${{ vars.AWS_REGION }}
+  NODE_VERSION: 20
+  AWS_REGION: ${{ vars.AWS_REGION }}
 
 jobs:
-    build-and-sonar:
-        name: Build, SonarQube, and Trivy
-        if: github.event_name == 'pull_request'
-        runs-on: ubuntu-latest
-        steps:
-            - name: Check out source
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
+  build-and-sonar:
+    name: Build, SonarQube, and Trivy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-            - name: Set up Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: ${{ env.NODE_VERSION }}
-                  cache: npm
-                  cache-dependency-path: |
-                      properQuestServer/package-lock.json
-                      PropertyQuestClient/package-lock.json
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            properQuestServer/package-lock.json
+            PropertyQuestClient/package-lock.json
 
-            - name: Cache SonarQube packages
-              uses: actions/cache@v4
-              with:
-                  path: ~/.sonar/cache
-                  key: ${{ runner.os }}-sonar
-                  restore-keys: |
-                      ${{ runner.os }}-sonar-
+      - name: Cache SonarQube packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: |
+            ${{ runner.os }}-sonar-
 
-            - name: Cache Trivy database
-              uses: actions/cache@v4
-              with:
-                  path: ~/.cache/trivy
-                  key: ${{ runner.os }}-trivy-${{ hashFiles('**/package-lock.json') }}
-                  restore-keys: |
-                      ${{ runner.os }}-trivy-
+      - name: Cache Trivy database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: ${{ runner.os }}-trivy-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-trivy-
 
-            - name: Install backend dependencies
-              working-directory: properQuestServer
-              run: npm ci
+      - name: Install backend dependencies
+        working-directory: properQuestServer
+        run: npm ci
 
-            - name: Build backend
-              working-directory: properQuestServer
-              run: npm run build
+      - name: Build backend
+        working-directory: properQuestServer
+        run: npm run build
 
-            - name: Install frontend dependencies
-              working-directory: PropertyQuestClient
-              run: npm ci
+      - name: Install frontend dependencies
+        working-directory: PropertyQuestClient
+        run: npm ci
 
-            - name: Build frontend
-              working-directory: PropertyQuestClient
-              run: npm run build
+      - name: Build frontend
+        working-directory: PropertyQuestClient
+        run: npm run build
 
-            - name: Scan backend filesystem with Trivy
-              uses: aquasecurity/trivy-action@0.28.0
-              with:
-                  scan-type: fs
-                  scan-ref: properQuestServer
-                  format: table
-                  output: trivy-backend.txt
-                  severity: CRITICAL,HIGH
-                  ignore-unfixed: true
+      - name: SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
-            - name: Scan frontend filesystem with Trivy
-              uses: aquasecurity/trivy-action@0.28.0
-              with:
-                  scan-type: fs
-                  scan-ref: PropertyQuestClient
-                  format: table
-                  output: trivy-frontend.txt
-                  severity: CRITICAL,HIGH
-                  ignore-unfixed: true
+      - name: SonarQube quality gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
-            - name: Upload Trivy reports
-              uses: actions/upload-artifact@v4
-              with:
-                  name: trivy-reports
-                  path: |
-                      trivy-backend.txt
-                      trivy-frontend.txt
+  docker-build-push:
+    name: Build and push Docker images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
+      image_tag: ${{ steps.image.outputs.tag }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
 
-            - name: SonarQube scan
-              uses: SonarSource/sonarqube-scan-action@v2
-              env:
-                  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-                  SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
 
-            - name: SonarQube quality gate
-              uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
-              timeout-minutes: 10
-              env:
-                  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-                  SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-    docker-build-push:
-        name: Build and push Docker images
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        runs-on: ubuntu-latest
-        permissions:
-            contents: read
-            id-token: write
-        outputs:
-            ecr_registry: ${{ steps.login-ecr.outputs.registry }}
-            image_tag: ${{ steps.image.outputs.tag }}
-        steps:
-            - name: Check out source
-              uses: actions/checkout@v4
+      - name: Set image tag
+        id: image
+        run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-            - name: Configure AWS credentials
-              uses: aws-actions/configure-aws-credentials@v4
-              with:
-                  aws-region: ${{ env.AWS_REGION }}
-                  role-to-assume: ${{ secrets.OIDC }}
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: properQuestServer
+          file: properQuestServer/Dockerfile
+          load: true
+          tags: propertybackendimg:${{ steps.image.outputs.tag }}
 
-            - name: Log in to Amazon ECR
-              id: login-ecr
-              uses: aws-actions/amazon-ecr-login@v2
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: PropertyQuestClient
+          file: PropertyQuestClient/Dockerfile
+          load: true
+          tags: propertyfrontendimg:${{ steps.image.outputs.tag }}
 
-            - name: Set image tag
-              id: image
-              run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Scan backend image with Trivy
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: propertybackendimg:${{ steps.image.outputs.tag }}
+          format: table
+          output: trivy-backend-image.txt
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 0
 
-            - name: Build and push backend image
-              uses: docker/build-push-action@v6
-              with:
-                  context: properQuestServer
-                  file: properQuestServer/Dockerfile
-                  push: true
-                  tags: |
-                      ${{ steps.login-ecr.outputs.registry }}/propertybackendimg:${{ steps.image.outputs.tag }}
-                      ${{ steps.login-ecr.outputs.registry }}/propertybackendimg:latest
+      - name: Scan frontend image with Trivy
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: propertyfrontendimg:${{ steps.image.outputs.tag }}
+          format: table
+          output: trivy-frontend-image.txt
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 0
 
-            - name: Build and push frontend image
-              uses: docker/build-push-action@v6
-              with:
-                  context: PropertyQuestClient
-                  file: PropertyQuestClient/Dockerfile
-                  push: true
-                  tags: |
-                      ${{ steps.login-ecr.outputs.registry }}/propertyfrontendimg:${{ steps.image.outputs.tag }}
-                      ${{ steps.login-ecr.outputs.registry }}/propertyfrontendimg:latest
+      - name: Upload container Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-container-reports
+          path: |
+            trivy-backend-image.txt
+            trivy-frontend-image.txt
+          if-no-files-found: warn
 
-    update-helm:
-        name: Update Helm repository
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        needs: docker-build-push
-        runs-on: ubuntu-latest
-        permissions:
-            contents: read
-        steps:
-            - name: Check out Helm repository
-              uses: actions/checkout@v4
-              with:
-                  repository: ${{ secrets.HELM_REPO_USER }}/${{ vars.HELM_REPO_NAME || 'propertyquest-helm' }}
-                  token: ${{ secrets.GITOPS_PAT }}
-                  path: helm-repo
+      - name: Push scanned images to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker tag "propertybackendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertybackendimg:${IMAGE_TAG}"
+          docker tag "propertybackendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertybackendimg:latest"
+          docker tag "propertyfrontendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertyfrontendimg:${IMAGE_TAG}"
+          docker tag "propertyfrontendimg:${IMAGE_TAG}" "${ECR_REGISTRY}/propertyfrontendimg:latest"
+          docker push "${ECR_REGISTRY}/propertybackendimg:${IMAGE_TAG}"
+          docker push "${ECR_REGISTRY}/propertybackendimg:latest"
+          docker push "${ECR_REGISTRY}/propertyfrontendimg:${IMAGE_TAG}"
+          docker push "${ECR_REGISTRY}/propertyfrontendimg:latest"
 
-            - name: Install yq
-              run: |
-                  curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o "$RUNNER_TEMP/yq"
-                  chmod +x "$RUNNER_TEMP/yq"
-                  echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+  update-helm:
+    name: Update Helm repository
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: docker-build-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out Helm repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.HELM_REPO_USER }}/${{ vars.HELM_REPO_NAME || 'propertyquest-helm' }}
+          token: ${{ secrets.GITOPS_PAT }}
+          path: helm-repo
 
-            - name: Update image and tag values
-              working-directory: helm-repo
-              env:
-                  ECR_REGISTRY: ${{ needs.docker-build-push.outputs.ecr_registry }}
-                  IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
-              run: |
-                  set -euo pipefail
-                  values_file=helm/propertyquest/values.yaml
+      - name: Install yq
+        run: |
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o "$RUNNER_TEMP/yq"
+          chmod +x "$RUNNER_TEMP/yq"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-                  test -f "$values_file"
-                  if yq -e '.backend.app and .frontend.app' "$values_file" >/dev/null; then
-                    yq -i \
-                      ".backend.app.image = \"${ECR_REGISTRY}/propertybackendimg\" | .backend.app.tag = \"${IMAGE_TAG}\" | .frontend.app.image = \"${ECR_REGISTRY}/propertyfrontendimg\" | .frontend.app.tag = \"${IMAGE_TAG}\"" \
-                      "$values_file"
-                  else
-                    echo "Expected .backend.app and .frontend.app values in $values_file" >&2
-                    exit 1
-                  fi
+      - name: Update image and tag values
+        working-directory: helm-repo
+        env:
+          ECR_REGISTRY: ${{ needs.docker-build-push.outputs.ecr_registry }}
+          IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          values_file=helm/propertyquest/values.yaml
 
-            - name: Commit and push Helm change
-              working-directory: helm-repo
-              run: |
-                  set -euo pipefail
-                  git config user.name "github-actions[bot]"
-                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-                  git add helm/propertyquest/values.yaml
-                  git diff --cached --quiet && exit 0
-                  git commit -m "chore: update images to ${GITHUB_SHA}"
-                  git push
+          test -f "$values_file"
+          if yq -e '.backend.app and .frontend.app' "$values_file" >/dev/null; then
+            yq -i \
+              ".backend.app.image = \"${ECR_REGISTRY}/propertybackendimg\" | .backend.app.tag = \"${IMAGE_TAG}\" | .frontend.app.image = \"${ECR_REGISTRY}/propertyfrontendimg\" | .frontend.app.tag = \"${IMAGE_TAG}\"" \
+              "$values_file"
+          else
+            echo "Expected .backend.app and .frontend.app values in $values_file" >&2
+            exit 1
+          fi
+
+      - name: Commit and push Helm change
+        working-directory: helm-repo
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add helm/propertyquest/values.yaml
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: update images to ${GITHUB_SHA}"
+          git push
+
+  slack-notification:
+    name: Notify Slack
+    if: always()
+    needs:
+      - build-and-sonar
+      - docker-build-push
+      - update-helm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send pipeline result to Slack
+        env:
+          SLACK_WEBHOOK_URL: "${{ secrets.SLACK_WEBHOOK }}"
+          BUILD_AND_SONAR_RESULT: "${{ needs.build-and-sonar.result }}"
+          DOCKER_BUILD_PUSH_RESULT: "${{ needs.docker-build-push.result }}"
+          UPDATE_HELM_RESULT: "${{ needs.update-helm.result }}"
+        run: |
+          set -euo pipefail
+
+            if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+                echo "SLACK_WEBHOOK_URL is not configured; skipping Slack notification."
+                exit 0
+            fi
+
+            pipeline_status=success
+            for result in "${BUILD_AND_SONAR_RESULT}" "${DOCKER_BUILD_PUSH_RESULT}" "${UPDATE_HELM_RESULT}"; do
+                case "${result}" in
+                    failure|cancelled)
+                        pipeline_status=failure
+                        ;;
+                esac
+            done
+
+            repository="${GITHUB_REPOSITORY}"
+            workflow_url="https://github.com/${repository}/actions/runs/${GITHUB_RUN_ID}"
+            message="${repository} pipeline ${pipeline_status} for ${GITHUB_REF_NAME} (${GITHUB_SHA::7})\n${workflow_url}"
+
+            payload=$(jq -n --arg text "${message}" '{text: $text}')
+            curl --fail-with-body --silent --show-error \
+                --header 'Content-Type: application/json' \
+                --data "${payload}" \
+                "${SLACK_WEBHOOK_URL}"
