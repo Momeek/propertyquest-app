@@ -175,7 +175,10 @@ jobs:
     needs: docker-build-push
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
+    outputs:
+      helm_pr_url: ${{ steps.create-pr.outputs.pr_url }}
     steps:
       - name: Check out Helm repository
         uses: actions/checkout@v4
@@ -183,6 +186,14 @@ jobs:
           repository: ${{ vars.HELM_REPO_USER }}/${{ vars.HELM_REPO_NAME || 'propertyquest-helm' }}
           token: ${{ secrets.GITOPS_PAT }}
           path: helm-repo
+          fetch-depth: 0
+
+      - name: Create or update feature branch
+        working-directory: helm-repo
+        run: |
+          set -euo pipefail
+          git checkout -B feature-helm
+          git push --set-upstream origin HEAD:feature-helm
 
       - name: Install yq
         run: |
@@ -210,15 +221,95 @@ jobs:
           fi
 
       - name: Commit and push Helm change
+        id: commit
         working-directory: helm-repo
+        env:
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add helm/propertyquest/values.yaml
-          git diff --cached --quiet && exit 0
+
+          if git diff --cached --quiet; then
+            echo "changes_detected=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           git commit -m "chore: update images to ${GITHUB_SHA}"
-          git push
+          git push --set-upstream origin HEAD:feature-helm
+          echo "changes_detected=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update pull request
+        id: create-pr
+        if: always()
+        working-directory: helm-repo
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_PAT }}
+          HELM_REPO_FULL: ${{ vars.HELM_REPO_USER }}/${{ vars.HELM_REPO_NAME || 'propertyquest-helm' }}
+          ECR_REGISTRY: ${{ needs.docker-build-push.outputs.ecr_registry }}
+          IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ steps.commit.outputs.changes_detected }}" != "true" ]]; then
+            echo "pr_url=" >> "$GITHUB_OUTPUT"
+            echo "No Helm values changes detected; skipping PR creation."
+            exit 0
+          fi
+
+          title="chore: update images to ${GITHUB_SHA}"
+          body=$(cat <<EOF
+          ## Summary
+          - Update backend image to ${ECR_REGISTRY}/propertybackendimg:${IMAGE_TAG}
+          - Update frontend image to ${ECR_REGISTRY}/propertyfrontendimg:${IMAGE_TAG}
+          - This PR was created automatically by the Propertyquest CI workflow.
+
+          > Approval is required before this PR is merged into main, so the Helm values.yaml file is only updated after review.
+          EOF
+          )
+
+          pr_url=$(gh pr list --repo "${HELM_REPO_FULL}" --head feature-helm --base main --json url --jq '.[0].url // empty')
+
+          if [[ -n "${pr_url}" ]]; then
+            gh pr edit "${pr_url}" --title "${title}" --body "${body}"
+            echo "pr_url=${pr_url}" >> "$GITHUB_OUTPUT"
+          else
+            pr_url=$(gh pr create --repo "${HELM_REPO_FULL}" --base main --head feature-helm --title "${title}" --body "${body}")
+            echo "pr_url=${pr_url}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify Slack about Helm PR
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: "${{ secrets.SLACK_WEBHOOK }}"
+          HELM_PR_URL: "${{ steps.create-pr.outputs.pr_url }}"
+          CHANGES_DETECTED: "${{ steps.commit.outputs.changes_detected }}"
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+            echo "SLACK_WEBHOOK_URL is not configured; skipping Slack notification."
+            exit 0
+          fi
+
+          if [[ -n "${HELM_PR_URL}" ]]; then
+            message="Propertyquest CI created or updated the Helm PR for ${GITHUB_REF_NAME} (${GITHUB_SHA::7})\nHelm PR: ${HELM_PR_URL}\nApproval is required before the values.yaml file in the Helm repo is merged into main."
+          else
+            if [[ "${CHANGES_DETECTED}" == "true" ]]; then
+              message="Propertyquest CI pushed Helm changes to the feature-helm branch for ${GITHUB_REF_NAME} (${GITHUB_SHA::7})\nA PR is being prepared for review and approval."
+            else
+              message="Propertyquest CI checked the Helm repo for ${GITHUB_REF_NAME} (${GITHUB_SHA::7})\nNo Helm values.yaml changes were needed."
+            fi
+          fi
+
+          payload=$(jq -n --arg text "${message}" '{text: $text}')
+          curl --fail-with-body --silent --show-error \
+            --header 'Content-Type: application/json' \
+            --data "${payload}" \
+            "${SLACK_WEBHOOK_URL}"
 
   slack-notification:
     name: Notify Slack
@@ -235,6 +326,7 @@ jobs:
           BUILD_AND_SONAR_RESULT: "${{ needs.build-and-sonar.result }}"
           DOCKER_BUILD_PUSH_RESULT: "${{ needs.docker-build-push.result }}"
           UPDATE_HELM_RESULT: "${{ needs.update-helm.result }}"
+          HELM_PR_URL: "${{ needs.update-helm.outputs.helm_pr_url }}"
         run: |
           set -euo pipefail
 
@@ -255,6 +347,10 @@ jobs:
             repository="${GITHUB_REPOSITORY}"
             workflow_url="https://github.com/${repository}/actions/runs/${GITHUB_RUN_ID}"
             message="${repository} pipeline ${pipeline_status} for ${GITHUB_REF_NAME} (${GITHUB_SHA::7})\n${workflow_url}"
+
+            if [[ -n "${HELM_PR_URL}" ]]; then
+                message="${message}\nHelm PR awaiting approval: ${HELM_PR_URL}"
+            fi
 
             payload=$(jq -n --arg text "${message}" '{text: $text}')
             curl --fail-with-body --silent --show-error \
